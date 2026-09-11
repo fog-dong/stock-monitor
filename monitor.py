@@ -16,6 +16,7 @@
 
 import os
 import re
+import json
 import urllib.request
 import urllib.parse
 import datetime
@@ -38,9 +39,90 @@ STOCKS = [
     ("hk03696", "英矽智能",    0.00,    0, (45.00, 47.50), (55.50, 57.50), 49.95, 42.70),
     ("hk01357", "美图公司",    0.00,    0, ( 3.56,  3.83), ( 4.48,  5.00),  4.25,  3.56),
     ("sz300688", "创业黑马",   0.00,    0, (29.00, 30.00), (32.50, 33.50), 29.99, 28.00),
+    # A组新增观察（A股烟蒂低位，形态待确认；击球区=加仓时机）
+    ("sz000568", "泸州老窖",   0.00,    0, (73.40, 76.00), (87.00, 91.50), 73.37, None),
+    ("sz000858", "五粮液",     0.00,    0, (70.40, 72.00), (80.50, 85.80), 70.40, None),
+    ("sh601166", "兴业银行",   0.00,    0, (17.70, 18.20), (19.00, 19.50), 17.73, None),
 ]
 
 QUOTE_URL = "https://qt.gtimg.cn/q={codes}"
+KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,day,,,6,qfq"
+
+# A 组观察票（形态确认对象）
+GROUP_A = ["sz000568", "sz000858", "sh601166"]
+
+
+def fetch_kline(code, days=6):
+    """拉取最近 N 日日K，返回 [(date, open, close, high, low), ...]（时间正序）。"""
+    url = KLINE_URL % code
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        raw = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", errors="ignore")
+        data = json.loads(raw)
+        node = data["data"][code]
+        key = "qfqday" if "qfqday" in node else "day"
+        rows = node[key][-days:]
+        out = []
+        for r in rows:
+            out.append((r[0], float(r[1]), float(r[2]), float(r[3]), float(r[4])))
+        return out
+    except Exception:
+        return []
+
+
+def detect_bottom_pattern(klines):
+    """简化底部形态检测（江恩×蜡烛图）：连续下跌后 锤子线/看涨吞没/放量阳线收上击球区。"""
+    if len(klines) < 4:
+        return False, "K线不足"
+    last = klines[-1]
+    d, o, c, h, lo = last
+    body = abs(c - o)
+    low_shadow = min(o, c) - lo
+    up_shadow = h - max(o, c)
+    prev3 = klines[:-1]
+    down_days = sum(1 for k in prev3 if k[2] < k[1])  # 前3日阴线数
+    hammer = body > 0 and low_shadow >= 2 * body and up_shadow <= body * 1.5
+    yang = c > o
+    engulf = c > o and o <= prev3[-1][2] and c > prev3[-1][1] and prev3[-1][2] < prev3[-1][1]
+    pattern = []
+    if down_days >= 2:
+        if hammer:
+            pattern.append("锤子线")
+        if engulf:
+            pattern.append("看涨吞没")
+        if yang and body > 0:
+            pattern.append("阳线企稳")
+    if not pattern:
+        return False, "近6日无底部形态（下跌%d日，形态待观察）" % down_days
+    return True, " ".join(pattern)
+
+
+def build_group_a_pattern(quotes):
+    """收盘模式下对 A 组三只做形态确认，返回提示段落。"""
+    lines = []
+    for code in GROUP_A:
+        name = dict((s[0], s[1]) for s in STOCKS).get(code, code)
+        q = quotes.get(code)
+        klines = fetch_kline(code)
+        hit, desc = detect_bottom_pattern(klines)
+        strike = None
+        for s in STOCKS:
+            if s[0] == code:
+                strike = s[4]
+                break
+        zone = ""
+        if strike and strike[0] and strike[1]:
+            zone = " 击球区%.2f~%.2f" % strike
+        if not klines:
+            lines.append("- %s：日K获取失败" % name)
+            continue
+        last = klines[-1]
+        if hit:
+            lines.append("- 🔔 %s：%s（%s 收盘%.2f%s），底部形态候选 → 小仓分批低吸，待次日确认加码" % (
+                name, desc, last[0], last[2], zone))
+        else:
+            lines.append("- %s：%s（最新收盘%.2f）" % (name, desc, last[2]))
+    return "\n".join(lines)
 
 
 def get_mode():
@@ -102,7 +184,7 @@ def check_level(stock, q):
         advice = "分批减仓兑现，回收资金"
     if strike and strike[0] and strike[1] and strike[0] <= price <= strike[1]:
         tag = "击球区"
-        advice = "小仓低吸做T（FOMC前仅限小仓）"
+        advice = "加仓时机：小仓分批低吸（形态确认后加码，FOMC前仅限小仓）"
 
     chg = (price - q["prev"]) / q["prev"] * 100 if q["prev"] else 0.0
     return tag, advice, chg
@@ -203,9 +285,10 @@ def main():
 
     if mode == "close":
         body, triggered = build_report(quotes, close_mode=True)
+        pattern = build_group_a_pattern(quotes)
         title = "持仓收盘复盘 %s" % datestr[:10]
-        desp = "## 持仓收盘复盘（%s）\n%s\n\n📐 **江恩关键位明细**\n%s\n\n%s\n\n%s\n\n⚠️ 免责声明：技术分析方法演示，不构成投资建议；行情以官方披露为准。" % (
-            datestr, body, levels, events, discipline)
+        desp = "## 持仓收盘复盘（%s）\n%s\n\n🔔 **A组形态确认**\n%s\n\n📐 **江恩关键位明细**\n%s\n\n%s\n\n%s\n\n⚠️ 免责声明：技术分析方法演示，不构成投资建议；行情以官方披露为准。" % (
+            datestr, body, pattern, levels, events, discipline)
     else:
         body, triggered = build_report(quotes, close_mode=False)
         if triggered:
