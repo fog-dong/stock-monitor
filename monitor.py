@@ -108,6 +108,23 @@ def check_level(stock, q):
     return tag, advice, chg
 
 
+def level_desc(stock):
+    """输出单只票的江恩关键位明细字符串。"""
+    code, name, cost, qty, strike, sell, warn, stop = stock
+    parts = []
+    if strike and strike[0] and strike[1]:
+        parts.append("回补击球区 %.2f~%.2f" % strike)
+    if sell and sell[0] and sell[1]:
+        parts.append("卖区 %.2f~%.2f" % sell)
+    if warn:
+        parts.append("跌破警告 <%.2f" % warn)
+    if stop:
+        parts.append("止损 <%.2f" % stop)
+    if not parts:
+        return ""
+    return "  ".join(parts)
+
+
 def build_report(quotes, close_mode):
     lines = []
     triggered = []
@@ -130,6 +147,11 @@ def build_report(quotes, close_mode):
     if not quotes:
         lines.append("（全部行情获取失败，请检查网络/接口）")
     return "\n".join(lines), triggered
+
+
+def build_levels():
+    """生成全部股票的江恩关键位明细段落。"""
+    return "\n".join("- %s：%s" % (s[1], level_desc(s)) for s in STOCKS if level_desc(s))
 
 
 def push(title, desp):
@@ -160,18 +182,38 @@ def main():
 
     now = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
     datestr = now.strftime("%Y-%m-%d %H:%M")
+    levels = build_levels()
+
+    # 小美纪律解读（三要素 + 情绪周期 + 江恩法则，固定文本）
+    discipline = (
+        "🧭 **小美思考原理解读**\n"
+        "- **三要素辩证**：竞争格局定方向（政策/产业/流动性大方向）、情绪位置定节奏（退潮期不重拳出击，放弃诱惑）、流动性做验证（成交量/南向/ETF 印证才出手）——三者共振才动手。\n"
+        "- **情绪周期**：试错→发酵→高潮→退潮→冰点。当前处退潮期，亏钱效应扩散时，宁可错过不可做错。\n"
+        "- **江恩24法则**：13 绝不摊平亏损（深套票不补仓摊平）；2/16 止损单设好不撤销、破位严格止损；4 盈利保护=上移止损。\n"
+        "- **风险演绎**：风险有来源有减弱节点（解铃还须系铃人），9/16 FOMC 落地前不确定性未出清，防守为主。"
+    )
+    # 近期大事（截至 9/11 已知；动态部分由豆包定时任务检索补充）
+    events = (
+        "📰 **近期大事（截至9/11，动态以豆包任务检索为准）**\n"
+        "- 恒指五连跌，测试 24500 江恩支撑（25000 已失守）；\n"
+        "- 9/16 FOMC：加息概率约 71%（8月PPI 5.4% 超预期、油价破 100 推升通胀预期）；\n"
+        "- 南向资金当日净买入约 21.8 亿港元，内资承接但量能有限；\n"
+        "- 创新药/港股医药板块整体弱势，消息面以 BD 与医保谈判预期为主，落地前勿提前押注。"
+    )
 
     if mode == "close":
         body, triggered = build_report(quotes, close_mode=True)
         title = "持仓收盘复盘 %s" % datestr[:10]
-        desp = "## 持仓收盘复盘（%s）\n%s\n\n**明日关注**：恒指24500支撑、9/16 FOMC（加息概率约71%）、各票卖区/击球区价。\n\n（云端自动生成，行情：腾讯公开接口）" % (datestr, body)
+        desp = "## 持仓收盘复盘（%s）\n%s\n\n📐 **江恩关键位明细**\n%s\n\n%s\n\n%s\n\n⚠️ 免责声明：技术分析方法演示，不构成投资建议；行情以官方披露为准。" % (
+            datestr, body, levels, events, discipline)
     else:
         body, triggered = build_report(quotes, close_mode=False)
         if triggered:
             title = "持仓提醒：%s 触达关键位" % "、".join(triggered[:3])
         else:
             title = "持仓监控-无触达"
-        desp = "## 持仓关键位监控（%s）\n%s\n\n**纪律**：退潮期不重拳、深套不补仓、破位严格止损、FOMC前防守为主。" % (datestr, body)
+        desp = "## 持仓关键位监控（%s）\n%s\n\n📐 **江恩关键位明细**\n%s\n\n%s\n\n%s\n\n⚠️ 免责声明：技术分析方法演示，不构成投资建议；行情以官方披露为准。" % (
+            datestr, body, levels, events, discipline)
 
     print("===== 消息内容 =====")
     print(title)
