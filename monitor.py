@@ -22,7 +22,15 @@ import urllib.parse
 import datetime
 
 # ============ 配置区 ============
-SENDKEY = os.environ.get("SENDKEY", "")  # Server 酱 SendKey，在 GitHub Secrets 配置
+# SendKey 读取顺序：环境变量 SENDKEY（GitHub Actions Secret）→ 同目录 sendkey.local.txt（本地定时任务用）
+SENDKEY = os.environ.get("SENDKEY", "")
+if not SENDKEY:
+    try:
+        _cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sendkey.local.txt")
+        with open(_cfg, "r", encoding="utf-8") as _f:
+            SENDKEY = _f.read().strip()
+    except Exception:
+        pass
 # ================================
 
 # 持仓与关键位：代码(腾讯行情), 名称, 成本, 数量, 击球区(低,高), 卖区(低,高), 跌破警告线, 止损线
